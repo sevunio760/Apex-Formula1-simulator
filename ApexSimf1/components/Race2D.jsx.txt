@@ -1,0 +1,143 @@
+import { useEffect, useRef } from 'react';
+
+// Pure 2D canvas renderer. All simulation lives in the shared engine.
+export default function Race2D({ engine, running }) {
+  const canvasRef = useRef(null);
+  const runningRef = useRef(running);
+  useEffect(() => { runningRef.current = running; }, [running]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    let rafId;
+    const path = engine.path;
+    const pathLen = engine.pathLen;
+    const carStates = engine.carStates;
+    const tmp = [0, 0];
+
+    const resize = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = canvas.clientWidth * dpr;
+      canvas.height = canvas.clientHeight * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    const draw = () => {
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      const size = Math.min(w, h) - 16;
+      const cx = w / 2;
+      const cy = h / 2;
+      const scale = size / 2;
+
+      ctx.fillStyle = '#0a0f1a';
+      ctx.fillRect(0, 0, w, h);
+
+      // infield
+      ctx.fillStyle = '#0e2a14';
+      ctx.beginPath();
+      path.forEach(([x, y], i) => {
+        const px = cx + x * scale, py = cy + y * scale;
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+      ctx.fill();
+
+      // track surface
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.strokeStyle = '#3a3f4a';
+      ctx.lineWidth = Math.max(8, scale * 0.11);
+      ctx.beginPath();
+      path.forEach(([x, y], i) => {
+        const px = cx + x * scale, py = cy + y * scale;
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+      ctx.stroke();
+
+      // kerbs
+      ctx.lineWidth = Math.max(6, scale * 0.11);
+      ctx.setLineDash([6, 8]);
+      for (let k = 0; k < pathLen; k += 6) {
+        ctx.strokeStyle = k % 12 === 0 ? '#ff3b3b' : '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(cx + path[k][0] * scale, cy + path[k][1] * scale);
+        ctx.lineTo(cx + path[(k + 4) % pathLen][0] * scale, cy + path[(k + 4) % pathLen][1] * scale);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // center dashed line
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([8, 12]);
+      ctx.beginPath();
+      path.forEach(([x, y], i) => {
+        const px = cx + x * scale, py = cy + y * scale;
+        i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+      });
+      ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // start/finish line
+      const sf = path[0], sfNext = path[1];
+      ctx.save();
+      ctx.translate(cx + sf[0] * scale, cy + sf[1] * scale);
+      ctx.rotate(Math.atan2(sfNext[1] - sf[1], sfNext[0] - sf[0]));
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(-3, -scale * 0.08, 6, scale * 0.16);
+      ctx.fillStyle = '#1a1a1a';
+      for (let r = -2; r <= 2; r++) { if (r % 2 === 0) ctx.fillRect(-3, r * scale * 0.03, 6, scale * 0.03); }
+      ctx.restore();
+
+      // cars
+      carStates.forEach((cm) => {
+        const seg = engine.posAt(cm.progress, tmp);
+        const ti = seg.i;
+        const nx = path[(ti + 2) % pathLen][0] - path[ti][0];
+        const ny = path[(ti + 2) % pathLen][1] - path[ti][1];
+        const tlen = Math.hypot(nx, ny) || 1;
+        const nnx = -ny / tlen, nny = nx / tlen;
+        const off = cm.lane * scale * 5;
+        const px = cx + tmp[0] * scale + nnx * off;
+        const py = cy + tmp[1] * scale + nny * off;
+        const r = Math.max(6, scale * 0.032);
+        if (cm.isPlayer) {
+          ctx.beginPath();
+          ctx.arc(px, py, r + 6, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(251,191,36,0.28)';
+          ctx.fill();
+        }
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fillStyle = cm.color;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = cm.isPlayer ? '#fbbf24' : 'rgba(0,0,0,0.55)';
+        ctx.stroke();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${Math.max(8, Math.round(r * 0.85))}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(cm.number), px, py + 0.5);
+      });
+    };
+
+    const tick = (now) => {
+      rafId = requestAnimationFrame(tick);
+      engine.update(now, runningRef.current);
+      draw();
+    };
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+
+  return <canvas ref={canvasRef} className="w-full h-full block" />;
+}

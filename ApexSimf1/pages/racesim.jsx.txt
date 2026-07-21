@@ -1,0 +1,215 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
+import { base44 } from '@/api/base44Client';
+import { DRIVERS, CARS, CALENDAR, TOTAL_LAPS, buildGrid, assignPoints, aggregateStandings } from '@/lib/f1Data';
+import Race2D from '@/components/Race2D';
+import Race3D from '@/components/Race3D';
+import { createRaceEngine } from '@/lib/raceEngine';
+import HighlightsFeed from '@/components/HighlightsFeed';
+import ResultsTable from '@/components/ResultsTable';
+import { ChevronRight, Square, Flag, Trophy } from 'lucide-react';
+
+export default function RaceSim() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { round } = useParams();
+  const state = location.state;
+
+  const roundNum = parseInt(round, 10);
+  const seasonLength = state?.seasonLength || CALENDAR.length;
+  const view = state?.view === '3d' ? '3d' : '2d';
+  const race = CALENDAR.find((c) => c.round === roundNum) || CALENDAR[0];
+
+  const [running, setRunning] = useState(true);
+  const [phase, setPhase] = useState('racing'); // racing | finished
+  const [highlights, setHighlights] = useState([]);
+  const [liveStats, setLiveStats] = useState({ leaderLap: 0, positions: [] });
+  const [results, setResults] = useState(null);
+  const [standings, setStandings] = useState([]);
+  const [saving, setSaving] = useState(false);
+
+  const gridRef = useRef(null);
+  if (!gridRef.current && state?.driverId && state?.carId) {
+    gridRef.current = buildGrid(state.driverId, state.carId);
+  }
+
+  useEffect(() => {
+    if (!state?.driverId || !state?.carId) {
+      navigate('/');
+    }
+  }, []);
+
+  const handleUpdate = useCallback((stats) => setLiveStats(stats), []);
+
+  const handleHighlight = useCallback((h) => {
+    setHighlights((prev) => [h, ...prev].slice(0, 40));
+  }, []);
+
+  const handleRaceEnd = useCallback(async (rawResults) => {
+    setSaving(true);
+    const scored = assignPoints(rawResults);
+    const records = scored.map((r) => ({
+      round: roundNum,
+      race_name: race.name,
+      driver_id: r.id,
+      driver_name: r.name,
+      team: r.team,
+      position: r.position,
+      points: r.points,
+      laps: r.laps,
+      fastest_lap: r.fastest_lap,
+      is_player: r.isPlayer,
+    }));
+    try {
+      await base44.entities.RaceResult.bulkCreate(records);
+      const all = await base44.entities.RaceResult.list('-created_date', 500);
+      setStandings(aggregateStandings(all));
+    } catch (e) {
+      // still show results even if persist fails
+    }
+    setResults(scored.map((r) => ({ driver_id: r.id, driver_name: r.name, team: r.team, color: r.color, position: r.position, points: r.points, laps: r.laps, fastest_lap: r.fastest_lap, is_player: r.isPlayer })));
+    setPhase('finished');
+    setSaving(false);
+  }, [roundNum, race.name]);
+
+  const handleStop = () => setRunning(false);
+
+  const engineRef = useRef(null);
+  if (!engineRef.current && gridRef.current) {
+    engineRef.current = createRaceEngine({
+      cars: gridRef.current,
+      totalLaps: TOTAL_LAPS,
+      round: roundNum,
+      onUpdate: handleUpdate,
+      onHighlight: handleHighlight,
+      onRaceEnd: handleRaceEnd,
+    });
+  }
+  useEffect(() => {
+    if (engineRef.current) {
+      engineRef.current.setCallbacks({ onUpdate: handleUpdate, onHighlight: handleHighlight, onRaceEnd: handleRaceEnd });
+    }
+  });
+  useEffect(() => {
+    if (!running && engineRef.current && !engineRef.current.finished) {
+      engineRef.current.finishRace();
+    }
+  }, [running]);
+
+  const playerLive = liveStats.positions.find((p) => p.isPlayer);
+  const leader = liveStats.positions[0];
+
+  if (!state?.driverId) return null;
+
+  return (
+    <div className="min-h-screen bg-[#070b12] text-white flex flex-col">
+      {/* Top bar */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-black/30">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.2em] text-amber-400 font-semibold">Round {race.round}</div>
+          <div className="text-lg font-bold leading-tight">{race.name}</div>
+        </div>
+        <div className="flex items-center gap-6">
+          <div className="text-center">
+            <div className="text-[10px] uppercase tracking-wider text-white/40">Lap</div>
+            <div className="font-mono font-bold text-xl">{Math.min(liveStats.leaderLap + 1, TOTAL_LAPS)}/{TOTAL_LAPS}</div>
+          </div>
+          {leader && (
+            <div className="text-center hidden sm:block">
+              <div className="text-[10px] uppercase tracking-wider text-white/40">Leader</div>
+              <div className="font-semibold text-sm flex items-center gap-1.5">
+                <span className="w-2 h-4 rounded-full" style={{ background: leader.color }} />
+                {leader.name}
+              </div>
+            </div>
+          )}
+          {playerLive && (
+            <div className="text-center hidden sm:block">
+              <div className="text-[10px] uppercase tracking-wider text-white/40">You</div>
+              <div className="font-semibold text-sm flex items-center gap-1.5">
+                <span className="w-2 h-4 rounded-full bg-amber-400" />
+                P{playerLive.position}
+              </div>
+            </div>
+          )}
+          {phase === 'racing' && (
+            <button
+              onClick={handleStop}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600/90 hover:bg-red-500 text-white text-sm font-semibold transition-colors"
+            >
+              <Square className="w-4 h-4 fill-current" /> Stop
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Main area */}
+      <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+        <div className="flex-1 relative min-h-[50vh] lg:min-h-0 bg-[#0a0f1a]">
+          {view === '3d' ? (
+            <Race3D engine={engineRef.current} running={running} />
+          ) : (
+            <Race2D engine={engineRef.current} running={running} />
+          )}
+          {saving && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+              <div className="text-center">
+                <div className="w-10 h-10 border-4 border-white/20 border-t-amber-400 rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-sm text-white/70">Recording results…</p>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="lg:w-80 xl:w-96 border-t lg:border-t-0 lg:border-l border-white/10 bg-black/20 h-64 lg:h-auto">
+          <HighlightsFeed highlights={highlights} />
+        </div>
+      </div>
+
+      {/* Results overlay */}
+      {phase === 'finished' && results && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-md p-4 sm:p-8">
+          <div className="max-w-4xl mx-auto space-y-6">
+            <div className="text-center">
+              <div className="flex items-center justify-center gap-2 text-amber-400 text-xs font-semibold tracking-[0.2em] uppercase mb-2">
+                <Flag className="w-4 h-4" /> Chequered Flag
+              </div>
+              <h2 className="text-4xl font-black">{race.name} — Result</h2>
+              {results.find((r) => r.is_player) && (
+                <p className="text-white/60 mt-2">
+                  You finished <span className="text-amber-400 font-bold">P{results.find((r) => r.is_player).position}</span>
+                  {results.find((r) => r.is_player).fastest_lap && ' · Fastest Lap 🏁'}
+                </p>
+              )}
+            </div>
+
+            <ResultsTable title="Race Classification" rows={results} showLaps showFastest />
+
+            {standings.length > 0 && (
+              <ResultsTable
+                title="Championship Standings"
+                rows={standings.map((s, i) => ({ ...s, position: i + 1 }))}
+              />
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
+              <button
+                onClick={() => navigate('/')}
+                className="flex items-center justify-center gap-2 px-8 py-3.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold transition-colors"
+              >
+                <ChevronRight className="w-5 h-5" /> Next Race
+              </button>
+              {roundNum >= seasonLength && (
+                <button
+                  onClick={() => navigate('/')}
+                  className="flex items-center justify-center gap-2 px-8 py-3.5 rounded-xl border border-white/20 hover:bg-white/5 text-white font-semibold transition-colors"
+                >
+                  <Trophy className="w-5 h-5 text-amber-400" /> View Final Championship
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

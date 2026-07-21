@@ -1,0 +1,332 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { base44 } from '@/api/base44Client';
+import { DRIVERS, CARS, CALENDAR, TOTAL_LAPS, aggregateStandings } from '@/lib/f1Data';
+import { getSeasonConfig, setSeasonConfig, clearSeasonConfig } from '@/lib/season';
+import ResultsTable from '@/components/ResultsTable';
+import { ChevronRight, Flag, Car, Users, Trophy, Gauge, RotateCcw, Calendar, Lock } from 'lucide-react';
+
+const SEASON_OPTIONS = [4, 6, 8];
+
+export default function Home() {
+  const navigate = useNavigate();
+  const [driverId, setDriverId] = useState(null);
+  const [carId, setCarId] = useState(null);
+  const [standings, setStandings] = useState([]);
+  const [completedRounds, setCompletedRounds] = useState(0);
+  const [seasonLength, setSeasonLength] = useState(8);
+  const [locked, setLocked] = useState(false);
+  const [view, setView] = useState('2d');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      const cfg = getSeasonConfig();
+      const sl = cfg.seasonLength || 8;
+      setSeasonLength(sl);
+      try {
+        const results = await base44.entities.RaceResult.list('-created_date', 500);
+        setStandings(aggregateStandings(results));
+        const maxRound = results.reduce((m, r) => Math.max(m, r.round || 0), 0);
+        setCompletedRounds(maxRound);
+        const started = results.length > 0;
+        let ld = cfg.lockedDriver || null;
+        let lc = cfg.lockedCar || null;
+        if (started) {
+          // Recover the locked driver from saved results if storage was cleared.
+          if (!ld) {
+            const playerRec = results.find((r) => r.is_player);
+            if (playerRec) ld = playerRec.driver_id;
+          }
+          // Recover the car from the driver's team if unknown.
+          if (!lc && ld) {
+            const drv = DRIVERS.find((d) => d.id === ld);
+            lc = (drv && CARS.find((c) => c.team === drv.team)?.id) || CARS[0].id;
+          }
+          setSeasonConfig({ seasonLength: sl, lockedDriver: ld, lockedCar: lc });
+          setLocked(true);
+          setDriverId(ld);
+          setCarId(lc);
+        } else if (cfg.lockedDriver) {
+          setLocked(true);
+          setDriverId(cfg.lockedDriver);
+          setCarId(cfg.lockedCar);
+        }
+      } catch (e) {
+        // first run — no results yet
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  const nextRound = completedRounds + 1;
+  const seasonComplete = completedRounds >= seasonLength;
+  const race = CALENDAR.find((c) => c.round === Math.min(nextRound, seasonLength)) || CALENDAR[0];
+
+  const startRace = () => {
+    if (!driverId || !carId || seasonComplete) return;
+    if (!locked) {
+      setSeasonConfig({ seasonLength, lockedDriver: driverId, lockedCar: carId });
+      setLocked(true);
+    }
+    navigate(`/race/${nextRound}`, { state: { driverId, carId, seasonLength, view } });
+  };
+
+  const restartSeason = async () => {
+    try {
+      await base44.entities.RaceResult.deleteMany({});
+    } catch (e) {}
+    clearSeasonConfig();
+    setStandings([]);
+    setCompletedRounds(0);
+    setLocked(false);
+    setDriverId(null);
+    setCarId(null);
+    setSeasonLength(8);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#070b12] flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-white/10 border-t-amber-400 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#070b12] text-white">
+      {/* Hero */}
+      <div className="relative overflow-hidden border-b border-white/10">
+        <div className="absolute inset-0 bg-gradient-to-br from-red-600/20 via-transparent to-cyan-500/10" />
+        <div className="absolute -top-24 -right-24 w-96 h-96 bg-red-600/20 rounded-full blur-3xl" />
+        <div className="relative max-w-6xl mx-auto px-6 py-12">
+          <div className="flex items-center gap-2 text-amber-400 text-xs font-semibold tracking-[0.2em] uppercase mb-3">
+            <Flag className="w-4 h-4" /> {seasonComplete ? `Season Complete · ${seasonLength} Rounds` : `Round ${nextRound} of ${seasonLength}`}
+          </div>
+          <h1 className="text-5xl md:text-6xl font-black tracking-tight">
+            F1 <span className="text-red-500">Race</span> Simulator
+          </h1>
+          <p className="text-white/50 mt-3 max-w-xl">
+            Pick your driver and car at the season opener, choose your calendar length, then ride with
+            your pick across every round with live highlights, standings, points, and lap-by-lap action.
+          </p>
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-6 py-10 space-y-12">
+        {seasonComplete && (
+          <div className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-5 py-4 flex items-center gap-3">
+            <Trophy className="w-5 h-5 text-amber-400" />
+            <p className="text-sm text-amber-100">Season complete! Champion: {standings[0]?.driver_name}. Reset to play again.</p>
+          </div>
+        )}
+
+        {/* Season length selector — only available before the season starts */}
+        {!locked && (
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <Calendar className="w-5 h-5 text-amber-400" />
+              <h2 className="text-xl font-bold">Choose your season length</h2>
+            </div>
+            <div className="flex gap-3">
+              {SEASON_OPTIONS.map((n) => {
+                const active = seasonLength === n;
+                return (
+                  <button
+                    key={n}
+                    onClick={() => setSeasonLength(n)}
+                    className={`px-5 py-3 rounded-xl border font-bold transition-all duration-200 ${
+                      active
+                        ? 'border-amber-400 bg-amber-400/10 text-amber-400 scale-[1.03]'
+                        : 'border-white/10 bg-white/[0.03] text-white/70 hover:border-white/25 hover:bg-white/[0.06]'
+                    }`}
+                  >
+                    {n} Races
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Race info */}
+        <section className="grid sm:grid-cols-3 gap-4">
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
+            <div className="text-[11px] uppercase tracking-wider text-white/40">Next Race</div>
+            <div className="text-xl font-bold mt-1">{seasonComplete ? 'Season finished' : race.name}</div>
+            <div className="text-sm text-white/50">{seasonComplete ? 'All rounds complete' : `${race.circuit}, ${race.country}`}</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
+            <div className="text-[11px] uppercase tracking-wider text-white/40">Season</div>
+            <div className="text-xl font-bold mt-1">{seasonLength} Races</div>
+            <div className="text-sm text-white/50">{completedRounds} completed</div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
+            <div className="text-[11px] uppercase tracking-wider text-white/40">Grid</div>
+            <div className="text-xl font-bold mt-1">{DRIVERS.length} Drivers</div>
+            <div className="text-sm text-white/50">{CARS.length} Cars</div>
+          </div>
+        </section>
+
+        {/* Driver selection */}
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <Users className="w-5 h-5 text-cyan-400" />
+            <h2 className="text-xl font-bold">1. Choose your driver</h2>
+            {locked && (
+              <span className="flex items-center gap-1 ml-2 text-xs text-amber-400/90 bg-amber-400/10 border border-amber-400/30 rounded-full px-2.5 py-1">
+                <Lock className="w-3 h-3" /> Locked — picked at Round 1
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {DRIVERS.map((d) => {
+              const active = driverId === d.id;
+              return (
+                <button
+                  key={d.id}
+                  disabled={locked}
+                  onClick={() => setDriverId(d.id)}
+                  className={`text-left rounded-xl border p-4 transition-all duration-200 ${
+                    active
+                      ? `border-amber-400 bg-amber-400/10 ${locked ? '' : 'scale-[1.02]'}`
+                      : locked
+                        ? 'border-white/5 bg-white/[0.02] cursor-not-allowed'
+                        : 'border-white/10 bg-white/[0.03] hover:border-white/25 hover:bg-white/[0.06]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-2xl font-black text-white/30 font-mono">#{d.number}</span>
+                    <span className="w-3 h-8 rounded-full" style={{ background: d.color }} />
+                  </div>
+                  <div className="mt-3 font-semibold text-sm leading-tight">{d.name}</div>
+                  <div className="text-xs text-white/40 mt-0.5">{d.team}</div>
+                  <div className="mt-2 flex items-center gap-1 text-[10px] text-white/40">
+                    <Gauge className="w-3 h-3" /> {d.rating} OVR
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Car selection */}
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <Car className="w-5 h-5 text-red-400" />
+            <h2 className="text-xl font-bold">2. Choose your car</h2>
+            {locked && (
+              <span className="flex items-center gap-1 ml-2 text-xs text-amber-400/90 bg-amber-400/10 border border-amber-400/30 rounded-full px-2.5 py-1">
+                <Lock className="w-3 h-3" /> Locked
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {CARS.map((c) => {
+              const active = carId === c.id;
+              return (
+                <button
+                  key={c.id}
+                  disabled={locked}
+                  onClick={() => setCarId(c.id)}
+                  className={`text-left rounded-xl border p-5 transition-all duration-200 ${
+                    active
+                      ? `border-amber-400 bg-amber-400/10 ${locked ? '' : 'scale-[1.02]'}`
+                      : locked
+                        ? 'border-white/5 bg-white/[0.02] cursor-not-allowed opacity-70'
+                        : 'border-white/10 bg-white/[0.03] hover:border-white/25 hover:bg-white/[0.06]'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="w-2 h-12 rounded-full" style={{ background: c.color }} />
+                    <div>
+                      <div className="font-bold">{c.name}</div>
+                      <div className="text-xs text-white/40">{c.team}</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 space-y-2">
+                    <div>
+                      <div className="flex justify-between text-[10px] uppercase tracking-wide text-white/40 mb-1">
+                        <span>Speed</span><span>{Math.round((c.speed / 0.152) * 100)}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${(c.speed / 0.152) * 100}%`, background: c.color }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-[10px] uppercase tracking-wide text-white/40 mb-1">
+                        <span>Reliability</span><span>{Math.round(c.reliability * 100)}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div className="h-full rounded-full bg-emerald-400" style={{ width: `${c.reliability * 100}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Start button */}
+        <div className="flex flex-col items-center gap-3 py-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-wider text-white/40">View</span>
+            <div className="flex rounded-lg border border-white/10 overflow-hidden">
+              <button
+                onClick={() => setView('2d')}
+                className={`px-4 py-2 text-sm font-semibold transition-colors ${view === '2d' ? 'bg-amber-400/15 text-amber-400' : 'text-white/60 hover:bg-white/5'}`}
+              >
+                2D
+              </button>
+              <button
+                onClick={() => setView('3d')}
+                className={`px-4 py-2 text-sm font-semibold transition-colors ${view === '3d' ? 'bg-amber-400/15 text-amber-400' : 'text-white/60 hover:bg-white/5'}`}
+              >
+                3D
+              </button>
+            </div>
+          </div>
+          <button
+            onClick={startRace}
+            disabled={!driverId || !carId || seasonComplete}
+            className="group flex items-center gap-3 px-10 py-4 rounded-xl bg-red-600 hover:bg-red-500 disabled:bg-white/5 disabled:text-white/30 text-white font-bold text-lg transition-all duration-200 disabled:cursor-not-allowed"
+          >
+            {seasonComplete ? 'Season Complete' : `Start Race — ${race.name}`}
+            {!seasonComplete && <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />}
+          </button>
+          {(!driverId || !carId) && !seasonComplete && (
+            <p className="text-xs text-white/40">Select a driver and a car to begin</p>
+          )}
+          {locked && !seasonComplete && (
+            <p className="text-xs text-amber-400/70 flex items-center gap-1.5">
+              <Lock className="w-3 h-3" /> Your pick is locked for the season
+            </p>
+          )}
+        </div>
+
+        {/* Season standings */}
+        {standings.length > 0 && (
+          <section>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-amber-400" />
+                <h2 className="text-xl font-bold">Championship Standings</h2>
+              </div>
+              <button
+                onClick={restartSeason}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/15 hover:bg-white/10 text-sm text-white/70 transition-colors"
+              >
+                <RotateCcw className="w-4 h-4" /> Restart Season
+              </button>
+            </div>
+            <ResultsTable
+              title={`After ${completedRounds} race${completedRounds !== 1 ? 's' : ''}`}
+              rows={standings.map((s, i) => ({ ...s, position: i + 1 }))}
+            />
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}

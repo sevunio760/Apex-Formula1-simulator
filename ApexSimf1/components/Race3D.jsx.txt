@@ -1,0 +1,135 @@
+import { useEffect, useRef } from 'react';
+import * as THREE from 'three';
+
+// 3D renderer built with three.js. Reuses the shared engine for all simulation,
+// so the race plays out identically to the 2D view.
+export default function Race3D({ engine, running }) {
+  const mountRef = useRef(null);
+  const runningRef = useRef(running);
+  useEffect(() => { runningRef.current = running; }, [running]);
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    let width = mount.clientWidth || 800;
+    let height = mount.clientHeight || 600;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#0a0f1a');
+    scene.fog = new THREE.Fog('#0a0f1a', 130, 340);
+
+    const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
+    camera.position.set(0, 92, 138);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(width, height);
+    mount.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+    dir.position.set(50, 110, 40);
+    scene.add(dir);
+
+    // infield ground
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(600, 600),
+      new THREE.MeshLambertMaterial({ color: '#0e2a14' })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.05;
+    scene.add(ground);
+
+    const path = engine.path;
+    const pathLen = engine.pathLen;
+    const S = 38; // world scale: track coords are -1..1
+    const pts3 = path.map(([x, y]) => new THREE.Vector3(x * S, 0, y * S));
+    const curve = new THREE.CatmullRomCurve3(pts3, true, 'catmullrom', 0.5);
+
+    const road = new THREE.Mesh(
+      new THREE.TubeGeometry(curve, 800, 3.2, 10, true),
+      new THREE.MeshLambertMaterial({ color: '#3a3f4a' })
+    );
+    scene.add(road);
+
+    const centerLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts3),
+      new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 1.4, gapSize: 2, transparent: true, opacity: 0.45 })
+    );
+    centerLine.computeLineDistances();
+    scene.add(centerLine);
+
+    // start/finish line
+    const sf = path[0], sfNext = path[1];
+    const sfMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(6, 0.2, 1.6),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    sfMesh.position.set(sf[0] * S, 0.25, sf[1] * S);
+    sfMesh.rotation.y = Math.atan2(sfNext[0] - sf[0], sfNext[1] - sf[1]);
+    scene.add(sfMesh);
+
+    const carStates = engine.carStates;
+    const carMeshes = carStates.map((cm) => {
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(2.4, 0.7, 4.4),
+        new THREE.MeshLambertMaterial({ color: cm.color, emissive: cm.isPlayer ? 0x4a3000 : 0x000000 })
+      );
+      body.position.y = 0.5;
+      group.add(body);
+      if (cm.isPlayer) {
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(3.4, 0.2, 8, 28),
+          new THREE.MeshBasicMaterial({ color: 0xfbbf24 })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = 0.2;
+        group.add(ring);
+      }
+      scene.add(group);
+      return group;
+    });
+
+    const tmp = [0, 0];
+    const placeCar = (cm, group) => {
+      const seg = engine.posAt(cm.progress, tmp);
+      const ti = seg.i;
+      const nx = path[(ti + 2) % pathLen][0] - path[ti][0];
+      const ny = path[(ti + 2) % pathLen][1] - path[ti][1];
+      const tlen = Math.hypot(nx, ny) || 1;
+      const nnx = -ny / tlen, nny = nx / tlen;
+      const lateral = cm.lane * 3;
+      const wx = (tmp[0] + nnx * lateral) * S;
+      const wz = (tmp[1] + nny * lateral) * S;
+      group.position.set(wx, 0, wz);
+      group.rotation.y = Math.atan2(nx, ny);
+    };
+
+    const onResize = () => {
+      width = mount.clientWidth; height = mount.clientHeight;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+    };
+    window.addEventListener('resize', onResize);
+
+    let rafId;
+    const tick = (now) => {
+      rafId = requestAnimationFrame(tick);
+      engine.update(now, runningRef.current);
+      for (let i = 0; i < carStates.length; i++) placeCar(carStates[i], carMeshes[i]);
+      renderer.render(scene, camera);
+    };
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', onResize);
+      renderer.dispose();
+      if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
+    };
+  }, []);
+
+  return <div ref={mountRef} className="w-full h-full" />;
+}

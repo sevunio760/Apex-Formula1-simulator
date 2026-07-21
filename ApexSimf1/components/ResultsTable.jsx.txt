@@ -1,0 +1,53 @@
+import React from 'react';
+import { Crown, Flag } from 'lucide-react';
+
+export default function ResultsTable({ title, rows, showLaps = false, showFastest = false }) {
+  return (
+    <div className="rounded-xl overflow-hidden border border-white/10 bg-white/[0.03]">
+      <div className="px-4 py-3 bg-white/[0.04] border-b border-white/10">
+        <h3 className="text-sm font-semibold tracking-wide text-white/90 uppercase">{title}</h3>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-[11px] uppercase tracking-wider text-white/40 border-b border-white/5">
+              <th className="px-4 py-2 text-left font-medium">Pos</th>
+              <th className="px-4 py-2 text-left font-medium">Driver</th>
+              <th className="px-4 py-2 text-left font-medium hidden sm:table-cell">Team</th>
+              {showLaps && <th className="px-4 py-2 text-right font-medium">Laps</th>}
+              <th className="px-4 py-2 text-right font-medium">Pts</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr
+                key={r.driver_id || i}
+                className={`border-b border-white/5 ${r.is_player ? 'bg-amber-400/10' : ''}`}
+              >
+                <td className="px-4 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-5 rounded-full" style={{ background: r.color || '#888' }} />
+                    <span className="font-mono text-white/70 w-5">{r.position || i + 1}</span>
+                    {(r.position || i + 1) === 1 && <Crown className="w-3.5 h-3.5 text-amber-400" />}
+                  </div>
+                </td>
+                <td className="px-4 py-2.5 text-white/90 font-medium">
+                  {r.driver_name}
+                  {r.is_player && <span className="ml-2 text-[10px] text-amber-400 uppercase tracking-wide">You</span>}
+                  {showFastest && r.fastest_lap && (
+                    <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-fuchsia-400">
+                      <Flag className="w-3 h-3" /> FL
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-white/50 hidden sm:table-cell">{r.team}</td>
+                {showLaps && <td className="px-4 py-2.5 text-right font-mono text-white/60">{r.laps}</td>}
+                <td className="px-4 py-2.5 text-right font-mono font-semibold text-white">{r.points}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
